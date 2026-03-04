@@ -1,4 +1,4 @@
-# Quantitative Finance Final Project: Backtesting Framework
+# MAFS5140 Project Framework
 
 Welcome to the final project for the Quantitative Finance course! This repository contains the event-driven backtesting framework you will use to develop, test, and evaluate your trading strategies. 
 
