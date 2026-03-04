@@ -26,14 +26,14 @@ class BacktestEngine:
                 total_steps = len(self.data_feed.data)
             except TypeError:
                 total_steps = None
+                
+        print("Starting backtest...")
 
         use_tqdm = tqdm is not None
         if use_tqdm:
             iterator = tqdm(self.data_feed, total=total_steps, desc="Backtest", unit="step")
         else:
             iterator = self.data_feed
-
-        print("Starting backtest...")
 
         for step_idx, (timestamp, current_prices) in enumerate(iterator, start=1):
             if not use_tqdm and step_idx % 100 == 0:
