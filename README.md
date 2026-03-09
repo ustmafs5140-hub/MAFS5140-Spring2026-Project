@@ -17,12 +17,14 @@ The framework is divided into five main Python scripts. **You only need to modif
 You will write your code entirely within the `Strategy` class inside `strategy.py`. 
 
 ### The `step` Function
-The engine will call your `step(self, current_prices)` function at every timestamp. 
-*   **Input (`current_prices`)**: A Pandas Series containing the close prices of all assets for the current timestamp. (Index = Tickers, Values = Prices).
+The engine will call your `step(self, current_market_data)` function at every timestamp. 
+*   **Input (`current_market_data`)**: A Pandas DataFrame containing the market snapshot of all assets for the current timestamp. 
+   * Index = Tickers
+   * Columns = fields (e.g. `close`, `volume`)
 *   **Output**: You must return a Pandas Series of target portfolio weights. (Index = Tickers, Values = Weights).
 
 ### State Management
-Because the `step` function only receives a snapshot of the *current* prices, you must use the `__init__(self)` method to initialize any variables (like lists or dataframes) if you need to store historical prices or compute rolling indicators (e.g., moving averages).
+Because the `step` function only receives a snapshot of the *current* market data, you must use the `__init__(self)` method to initialize any variables (like lists or dataframes) if you need to store historical prices/volumes or compute rolling indicators (e.g., moving averages).
 
 ### ⚠️ Trading Rules & Constraints
 The `engine.py` will strictly validate your output at every step. If you violate these rules, the backtest will instantly fail and throw an error:

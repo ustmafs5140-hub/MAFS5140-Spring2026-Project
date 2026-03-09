@@ -17,7 +17,7 @@ class BacktestEngine:
         Returns a Pandas Series of the portfolio's periodic returns.
         """
         portfolio_returns = {}
-        prev_prices = None
+        prev_close_prices = None
         prev_weights = None
 
         total_steps = None
@@ -35,7 +35,7 @@ class BacktestEngine:
         else:
             iterator = self.data_feed
 
-        for step_idx, (timestamp, current_prices) in enumerate(iterator, start=1):
+        for step_idx, (timestamp, current_market_data) in enumerate(iterator, start=1):
             if not use_tqdm and step_idx % 100 == 0:
                 if total_steps:
                     pct = (step_idx / total_steps) * 100
@@ -43,10 +43,16 @@ class BacktestEngine:
                 else:
                     print(f"Backtest progress: {step_idx} steps", end="\r", flush=True)
 
+            if "close" not in current_market_data.columns:
+                raise ValueError(
+                    f"Data Error at {timestamp}: 'close' column is required in market data."
+                )
+            current_close_prices = current_market_data["close"]
+
             # 1. Calculate Portfolio Return for the current period
-            if prev_prices is not None and prev_weights is not None:
+            if prev_close_prices is not None and prev_weights is not None:
                 # Calculate percentage change of each asset
-                asset_returns = (current_prices - prev_prices) / prev_prices
+                asset_returns = (current_close_prices - prev_close_prices) / prev_close_prices
                 
                 # Portfolio return is the dot product of previous weights and current asset returns.
                 # Since cash earns 0%, any weight < 1.0 naturally leaves the remainder as cash.
@@ -55,15 +61,15 @@ class BacktestEngine:
 
             # 2. Get new weights from the student's strategy
             try:
-                new_weights = self.strategy.step(current_prices)
+                new_weights = self.strategy.step(current_market_data)
             except Exception as e:
                 raise RuntimeError(f"Strategy execution failed at {timestamp}.\nError: {e}")
 
             # 3. Validate the output
-            self._validate_weights(new_weights, timestamp, current_prices.index)
+            self._validate_weights(new_weights, timestamp, current_market_data.index)
 
             # 4. Update state for the next timestamp
-            prev_prices = current_prices
+            prev_close_prices = current_close_prices
             prev_weights = new_weights
 
         if not use_tqdm:
