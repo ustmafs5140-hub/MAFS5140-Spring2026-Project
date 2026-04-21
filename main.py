@@ -5,6 +5,7 @@ from strategy import Strategy
 
 def main():
     # 1. Define the path to the dataset
+    # Modify this path if your data is located elsewhere. 
     data_path = "data_downloader/test.parquet" 
     
     try:
