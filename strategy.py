@@ -11,84 +11,86 @@ STUDENT INSTRUCTIONS:
    framework. Changing core engine files may break the backtester and cause 
    evaluation errors.
 """
+import pandas as pd
+import numpy as np
+import cvxpy as cp
 
 class Strategy:
     def __init__(self):
-        """
-        Initialize any state variables here.
-        This function is called exactly once at the very beginning of the backtest.
+        # 最优参数（基于验证集搜索）
+        self.lookback = 20
+        self.top_n = 44
+        self.rebalance_freq = 39
+        self.w_momentum = 0.6
+        self.w_lowvol = 0.2
+        self.w_volume = 0.2
         
-        GUIDANCE:
-        - You can create state variables using 'self.' to store data across steps.
-        - For example, you might want to store historical market data, indicators, 
-          or previous portfolio allocations.
-        - PERFORMANCE WARNING: Storing too much historical data in memory (e.g., 
-          growing a list infinitely) can significantly slow down the backtest or 
-          cause memory crashes. Always try to keep only the data you need. 
-        """
-        # EXAMPLE STATE VARIABLES (Modify or remove these for your strategy):
-        # We will use a list to store the historical price Series
-        self.price_history = []
-        self.lookback_period = 78
-
-    def step(self, current_market_data: pd.DataFrame) -> pd.Series:
-        """
-        Core strategy logic. 
-        This function is called at every timestamp by the BacktestEngine.
+        self.price_history = pd.DataFrame()
+        self.volume_history = pd.DataFrame()
+        self.bar_counter = 0
+        self.last_rebalance_bar = 0
+        self.current_weights = None
         
-        INPUT:
-        current_market_data (pd.DataFrame): Market snapshot at the current timestamp.
-                                            Index = Tickers, Columns = fields
-                                            ('close', 'volume').
-                                    
-        OUTPUT:
-        pd.Series: Target weights for the portfolio.
-                   Index = Tickers, Values = Weights (0.0 to 1.0).
-                   The sum of weights must be <= 1.0.
-                   
-        GUIDANCE:
-        - The code below is just a reference/example implementation. 
-        - Please completely modify this function to reflect your own trading logic.
-        """
+    def step(self, current_market_data):
+        self.bar_counter += 1
+        current_prices = current_market_data['close']
+        current_volumes = current_market_data['volume']
         
-        # --- START OF EXAMPLE STRATEGY LOGIC ---
+        self.price_history = pd.concat([self.price_history, current_prices.to_frame().T], ignore_index=True)
+        self.volume_history = pd.concat([self.volume_history, current_volumes.to_frame().T], ignore_index=True)
         
-        if "close" not in current_market_data.columns:
-            raise ValueError("Input market data must contain a 'close' column.")
-
-        current_prices = current_market_data["close"]
-
-        # 1. Update internal state with the new data
-        self.price_history.append(current_prices)
+        need_rebalance = (self.current_weights is None) or (self.bar_counter - self.last_rebalance_bar >= self.rebalance_freq)
         
-        # Keep only the required lookback period to save memory (Best Practice!)
-        if len(self.price_history) > self.lookback_period:
-            self.price_history.pop(0)
+        if need_rebalance and len(self.price_history) >= self.lookback + 1:
+            self.current_weights = self._rebalance()
+            self.last_rebalance_bar = self.bar_counter
+        elif self.current_weights is None:
+            n = len(current_prices)
+            self.current_weights = pd.Series(1.0 / n, index=current_prices.index)
+            self.last_rebalance_bar = self.bar_counter
             
-        # 2. Strategy Logic
-        # If we don't have enough data yet, stay 100% in cash (return all zeros)
-        if len(self.price_history) < self.lookback_period:
-            return pd.Series(0.0, index=current_prices.index)
-            
-        # Convert our history list into a DataFrame to easily calculate the mean
-        history_df = pd.DataFrame(self.price_history)
-        moving_average = history_df.mean()
+        return self.current_weights
+    
+    def _rebalance(self):
+        prices = self.price_history.iloc[-self.lookback-1:]
+        volumes = self.volume_history.iloc[-self.lookback-1:]
         
-        # Identify assets where the current price is ABOVE its moving average (Trend Following)
-        bullish_assets = current_prices[current_prices > moving_average].index
+        ret = (prices.iloc[-1] - prices.iloc[0]) / prices.iloc[0]
+        pct_chg = prices.pct_change().dropna()
+        vol = pct_chg.std()
+        avg_vol = volumes.iloc[:-1].mean()
+        vol_ratio = volumes.iloc[-1] / avg_vol
         
-        # 3. Portfolio Allocation
-        # Initialize all weights to 0.0
-        weights = pd.Series(0.0, index=current_prices.index)
+        ret_norm = (ret - ret.min()) / (ret.max() - ret.min()) if ret.max() > ret.min() else pd.Series(0.5, index=ret.index)
+        vol_norm = 1 - (vol - vol.min()) / (vol.max() - vol.min()) if vol.max() > vol.min() else pd.Series(0.5, index=vol.index)
+        vol_ratio_norm = (vol_ratio - vol_ratio.min()) / (vol_ratio.max() - vol_ratio.min()) if vol_ratio.max() > vol_ratio.min() else pd.Series(0.5, index=vol_ratio.index)
         
-        # Allocate equally among bullish assets
-        num_bullish = len(bullish_assets)
-        if num_bullish > 0:
-            weight_per_asset = 1.0 / num_bullish
-            weights[bullish_assets] = weight_per_asset
-            
-        # Return the weights. 
-        # The engine will verify that weights >= 0 and weights.sum() <= 1.0
+        score = (self.w_momentum * ret_norm + self.w_lowvol * vol_norm + self.w_volume * vol_ratio_norm)
+        selected = score.nlargest(self.top_n).index
+        
+        if len(selected) == 0:
+            return pd.Series(0.0, index=score.index)
+        
+        selected_returns = pct_chg[selected]
+        Sigma = selected_returns.cov().values
+        Sigma += np.eye(Sigma.shape[0]) * 1e-8
+        
+        n = len(selected)
+        w = cp.Variable(n)
+        objective = cp.Minimize(cp.quad_form(w, Sigma))
+        constraints = [w >= 0, cp.sum(w) == 1]
+        prob = cp.Problem(objective, constraints)
+        prob.solve(verbose=False)
+        
+        if prob.status not in ["optimal", "optimal_inaccurate"]:
+            optimal_weights = np.ones(n) / n
+        else:
+            optimal_weights = w.value
+        
+        # 处理微小负数并归一化
+        optimal_weights = np.clip(optimal_weights, 0, None)
+        optimal_weights = optimal_weights / optimal_weights.sum()
+        
+        weights = pd.Series(0.0, index=score.index)
+        weights[selected] = optimal_weights
         return weights
-        
-        # --- END OF EXAMPLE STRATEGY LOGIC ---
